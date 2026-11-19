@@ -1,6 +1,7 @@
 """Rule-based extractor for Chinese financial sentences (regex + rules, no LLM).
 
-Reuses no external NLP model; patterns are intentionally small and auditable.
+Metric terms are matched with a single alternation ordered longest-first, so compound
+terms such as 扣非归母净利润 are never mis-read as the shorter 归母净利润 or 净利润.
 """
 from __future__ import annotations
 
@@ -15,12 +16,31 @@ PERIOD_RE = re.compile(
 )
 QUARTER_CN = {'一': 1, '二': 2, '三': 3, '四': 4, '1': 1, '2': 2, '3': 3, '4': 4}
 REPORT_KEYWORD = {'半年报': 2, '中报': 2, '三季报': 3, '一季报': 1}
-METRIC_ALIASES = {'归母净利润': '归属于上市公司股东的净利润', '营业总收入': '营业收入'}
-METRIC_TERMS = [
-    '归属于上市公司股东的净利润', '归母净利润', '营业总收入', '营业收入',
-    '净利润', '营业利润', '总资产', '净资产',
+
+# Surface term -> canonical metric name (canonical names match fetcher.AK_METRIC_ROW keys).
+METRIC_ALIASES = {
+    '归母净利润': '归属于上市公司股东的净利润',
+    '归属于母公司股东的净利润': '归属于上市公司股东的净利润',
+    '营业总收入': '营业收入',
+    '营收': '营业收入',
+    '扣非归母净利润': '扣除非经常性损益后的归属于上市公司股东的净利润',
+    '归属于上市公司股东的扣除非经常性损益的净利润': '扣除非经常性损益后的归属于上市公司股东的净利润',
+    '扣非净利润': '扣除非经常性损益后的净利润',
+    '扣除非经常性损益的净利润': '扣除非经常性损益后的净利润',
+    '每股收益': '基本每股收益',
+}
+CANONICAL_METRICS = [
+    '归属于上市公司股东的净利润', '营业收入', '净利润', '营业利润', '营业成本', '毛利率',
+    '基本每股收益', '稀释每股收益', '总资产', '净资产',
 ]
-VALUE_RE = re.compile(r'(-?\d+(?:\.\d+)?)\s*(万亿|亿元|亿|万元|万|元)')
+# Longest first: at any position the longest matching term wins.
+METRIC_TERMS = sorted(set(METRIC_ALIASES) | set(CANONICAL_METRICS), key=lambda t: (-len(t), t))
+METRIC_RE = re.compile('|'.join(re.escape(t) for t in METRIC_TERMS))
+
+# Amounts: plain or with thousands separators, e.g. 130亿元, 1,300.5亿元, 0.85元, 1.2万亿元.
+VALUE_RE = re.compile(
+    r'(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*(万亿|亿元|亿|万元|万|元)'
+)
 UNIT = {'万亿': 1e12, '亿元': 1e8, '亿': 1e8, '万元': 1e4, '万': 1e4, '元': 1.0}
 GROWTH_RE = re.compile(
     r'(同比|环比)\s*(增长|增加|上涨|上升|提升|下降|减少|下滑|降低)?\s*(-?\d+(?:\.\d+)?)\s*%'
@@ -42,10 +62,15 @@ def _period(m: re.Match) -> str:
 
 
 def _metric(sentence: str) -> str | None:
-    for term in METRIC_TERMS:
-        if term in sentence:
-            return METRIC_ALIASES.get(term, term)
-    return None
+    m = METRIC_RE.search(sentence)
+    if m is None:
+        return None
+    term = m.group(0)
+    return METRIC_ALIASES.get(term, term)
+
+
+def _amount(number: str, unit: str) -> float:
+    return float(number.replace(',', '')) * UNIT[unit]
 
 
 def extract_claims(text: str) -> list[FinancialClaim]:
@@ -72,7 +97,7 @@ def extract_claims(text: str) -> list[FinancialClaim]:
         if vm:
             claims.append(FinancialClaim(
                 kind=ClaimKind.VALUE,
-                declared_value=float(vm.group(1)) * UNIT[vm.group(2)],
+                declared_value=_amount(vm.group(1), vm.group(2)),
                 **base,
             ))
         for gm in growths:
