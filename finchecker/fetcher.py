@@ -69,9 +69,10 @@ class MockSource(GroundTruthSource):
         return GroundTruth(stock_code=code, name=MOCK_NAMES[code], period=period, metric=metric, **row)
 
 
-PERIOD_TO_MMDD = {'1Q': '0331', '2Q': '0630', '3Q': '0930', 'FY': '1231'}
+# Period suffixes match extractor output: 2025Q3, 2025FY.
+PERIOD_TO_MMDD = {'Q1': '0331', 'Q2': '0630', 'Q3': '0930', 'FY': '1231'}
 # (year offset, mmdd) of the previous quarter-end
-PREV_QUARTER = {'1Q': (-1, '1231'), '2Q': (0, '0331'), '3Q': (0, '0630'), 'FY': (0, '0930')}
+PREV_QUARTER = {'Q1': (-1, '1231'), 'Q2': (0, '0331'), 'Q3': (0, '0630'), 'FY': (0, '0930')}
 # canonical metric -> row label in akshare stock_financial_abstract output
 AK_METRIC_ROW = {
     '营业收入': '营业总收入',
