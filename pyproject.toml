@@ -14,6 +14,8 @@ dependencies = [
     "fastmcp>=2.0",
     "akshare>=1.14",
     "pydantic>=2.5",
+    "pandas>=2",
+    "requests>=2.31",
     "rich>=13.7",
 ]
 
@@ -23,6 +25,7 @@ dev = ["pytest>=8", "ruff>=0.5", "pandas>=2"]
 [project.scripts]
 finchecker = "finchecker.cli:main"
 finchecker-mcp = "finchecker.mcp_server:main"
+finchecker-market-import = "finchecker.market_import:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

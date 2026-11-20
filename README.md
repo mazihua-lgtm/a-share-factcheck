@@ -2,6 +2,8 @@
 
 面向 A 股财报和研报的事实核查工具。用规则抽取股票代码、报告期、指标、金额和同比，再与明确选择的数据源比对。默认使用有公告依据的有限数据快照；取不到依据就报告无法核实，不回退到模拟数据。核查结果只供人工研究，不提供交易功能。
 
+同一个 MCP 还提供[行情研究、选股与文档工具](docs/market-mcp.md)。查询和筛选与财报核查分开：来自行情数据或第三方研报的内容，不会自动变成公告核查证据。
+
 ## 复用的上游开源组件
 
 本项目不重复造轮子, 以下组件直接使用:
@@ -72,6 +74,7 @@ finchecker --file report.txt --source akshare  # 显式选用第三方摘要
 
 - `check_financial_claims(text, source='disclosure')`：源可显式改为 `akshare`，不能选 `mock`。
 - `demo_financial_claims()`：仅运行内置虚构例子，返回 `simulated: true` 和 `status: simulation`。
+- `discover_data`、`query_dataset`、`search_documents`、`get_document`、`screen_stocks`、`diagnose_stock`、`get_realtime`、`predict_lianban_promotion`：见[数据要求、能力边界和示例](docs/market-mcp.md)。
 
 ## 公告依据
 
