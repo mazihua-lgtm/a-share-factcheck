@@ -5,7 +5,7 @@ from typing import Optional
 
 from finchecker.fetcher import GroundTruthSource
 from finchecker.models import (
-    ClaimKind, DiscrepancyReport, FinancialClaim, Status, VerificationResult,
+    ClaimKind, DiscrepancyReport, FinancialClaim, ReportStatus, Status, VerificationResult,
 )
 
 REL_TOL = 0.005  # amounts: 0.5% relative tolerance
@@ -70,7 +70,7 @@ def _check_growth(claim: FinancialClaim, expected: float) -> VerificationResult:
     label = '同比' if claim.kind == ClaimKind.YOY else '环比'
     if d is None:
         return _result(claim, Status.UNVERIFIABLE, 'missing_value', '未识别到声明增速', exp_growth=expected)
-    if abs(d - expected) <= PCT_TOL:
+    if d * expected >= 0 and abs(d - expected) <= PCT_TOL:
         return _result(claim, Status.PASS, None, f'{label}增速一致', exp_growth=expected)
     if abs(d + expected) <= PCT_TOL and abs(expected) > PCT_TOL:
         return _result(
@@ -88,28 +88,51 @@ def _check_growth(claim: FinancialClaim, expected: float) -> VerificationResult:
 def verify_claim(claim: FinancialClaim, source: GroundTruthSource) -> VerificationResult:
     if not claim.stock_code:
         return _result(claim, Status.UNVERIFIABLE, 'missing_code', '未识别到股票代码')
-    if not source.code_exists(claim.stock_code):
+    if source.code_exists(claim.stock_code) is False:
         return _result(claim, Status.FAIL, 'wrong_code',
                        f'股票代码 {claim.stock_code} 不存在于A股列表, 疑似代码张冠李戴')
     if not claim.period or not claim.metric:
-        return _result(claim, Status.UNVERIFIABLE, 'missing_context', '缺少报告期或指标名称')
+        return _result(claim, Status.UNVERIFIABLE, 'missing_context', '报告期或指标缺失或不唯一')
+    if claim.kind == ClaimKind.QOQ and not source.simulated:
+        return _result(claim, Status.UNVERIFIABLE, 'unsupported_qoq', '缺少可确认的单季度口径，不用累计期末值重算环比')
+    if not source.simulated and not claim.period.endswith('FY'):
+        return _result(claim, Status.UNVERIFIABLE, 'unsupported_period', '当前仅核查年报，未区分单季度与年初至期末累计口径')
     truth = source.get(claim.stock_code, claim.period, claim.metric)
     if truth is None:
         return _result(claim, Status.UNVERIFIABLE, 'no_ground_truth', '数据源中无对应记录')
     if claim.kind == ClaimKind.VALUE:
-        return _check_value(claim, truth.value)
+        return _check_value(claim, truth.value).model_copy(update={'evidence': truth.evidence})
     base = truth.prior_year_value if claim.kind == ClaimKind.YOY else truth.prior_quarter_value
     expected = recompute_growth(truth.value, base)
     if expected is None:
         return _result(claim, Status.UNVERIFIABLE, 'no_base_period', '缺少对比期数据, 无法重算增速')
-    return _check_growth(claim, expected)
+    result = _check_growth(claim, expected)
+    if truth.evidence is not None and claim.kind == ClaimKind.YOY:
+        result.evidence = truth.evidence.model_copy(update={
+            'comparison_period': f'{int(truth.period[:4]) - 1}{truth.period[4:]}',
+            'comparison_value_yuan': base,
+        })
+    return result
 
 
 def verify_claims(claims: list[FinancialClaim], source: GroundTruthSource) -> DiscrepancyReport:
     results = [verify_claim(c, source) for c in claims]
     passed = sum(r.status == Status.PASS for r in results)
     failed = sum(r.status == Status.FAIL for r in results)
+    if source.simulated:
+        status = ReportStatus.SIMULATION
+    elif not results:
+        status = ReportStatus.NO_CLAIMS
+    elif failed:
+        status = ReportStatus.MISMATCH
+    elif not passed:
+        status = ReportStatus.UNVERIFIABLE
+    elif passed < len(results):
+        status = ReportStatus.INCOMPLETE
+    else:
+        status = ReportStatus.VERIFIED
     return DiscrepancyReport(
+        source=source.name, simulated=source.simulated, status=status,
         total=len(results), passed=passed, failed=failed,
         unverifiable=len(results) - passed - failed, results=results,
     )

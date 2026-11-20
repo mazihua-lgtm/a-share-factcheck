@@ -23,7 +23,7 @@ class FakeAk:
         if self.broken:
             raise ConnectionError('simulated outage')
         return pd.DataFrame({
-            '指标': ['营业总收入'],
+            '指标': ['营业收入'],
             '20250930': [1.3e10],
             '20240930': [1.2e10],
             '20250630': [8.7e9],
@@ -84,3 +84,14 @@ def test_fetch_error_type_is_datasourceerror(tmp_path):
     src = _source(ak, tmp_path, retries=1, cache=False)
     with pytest.raises(DataSourceError):
         src._call('probe', lambda: ak.stock_info_a_code_name())
+
+
+@pytest.mark.parametrize('frame', [
+    pd.DataFrame({'类别': ['营业收入'], '20251231': [1e9]}),
+    pd.DataFrame({'指标': ['营业总收入'], '20251231': [1e9]}),
+    pd.DataFrame({'指标': ['营业收入', '营业收入'], '20251231': [1e9, 2e9]}),
+])
+def test_akshare_does_not_guess_missing_or_ambiguous_metric(tmp_path, monkeypatch, frame):
+    ak = FakeAk()
+    monkeypatch.setattr(ak, 'stock_financial_abstract', lambda symbol: frame)
+    assert _source(ak, tmp_path).get('600519', '2025FY', '营业收入') is None

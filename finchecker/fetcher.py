@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 import pickle
 import sqlite3
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from pydantic import BaseModel
+
+from finchecker.models import Evidence
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +38,7 @@ class GroundTruth(BaseModel):
     value: float  # yuan
     prior_year_value: Optional[float] = None
     prior_quarter_value: Optional[float] = None
+    evidence: Optional[Evidence] = None
 
 
 class DataSourceError(RuntimeError):
@@ -42,8 +46,11 @@ class DataSourceError(RuntimeError):
 
 
 class GroundTruthSource(ABC):
+    name: str
+    simulated = False
+
     @abstractmethod
-    def code_exists(self, code: str) -> bool: ...
+    def code_exists(self, code: str) -> Optional[bool]: ...
 
     @abstractmethod
     def get(self, code: str, period: str, metric: str) -> Optional[GroundTruth]: ...
@@ -59,6 +66,9 @@ MOCK_DATA = {
 
 
 class MockSource(GroundTruthSource):
+    name = 'mock'
+    simulated = True
+
     def code_exists(self, code: str) -> bool:
         return code in MOCK_NAMES
 
@@ -69,13 +79,59 @@ class MockSource(GroundTruthSource):
         return GroundTruth(stock_code=code, name=MOCK_NAMES[code], period=period, metric=metric, **row)
 
 
+DISCLOSURES = {
+    '600519': {
+        'name': '贵州茅台',
+        'published_on': '2026-04-17',
+        'url': 'https://static.cninfo.com.cn/finalpage/2026-04-17/1225114731.PDF',
+        'pdf_page': 4,
+        'metrics': {
+            '营业收入': (168_838_102_514.79, 170_899_152_276.34),
+            '归属于上市公司股东的净利润': (82_320_067_101.68, 86_228_146_421.62),
+        },
+    },
+    '600900': {
+        'name': '长江电力',
+        'published_on': '2026-04-30',
+        'url': 'https://static.cninfo.com.cn/finalpage/2026-04-30/1225262042.PDF',
+        'pdf_page': 3,
+        'metrics': {
+            '营业收入': (86_241_940_222.20, 84_491_870_566.52),
+            '归属于上市公司股东的净利润': (34_502_809_176.39, 32_496_172_808.65),
+        },
+    },
+}
+
+
+class DisclosureSource(GroundTruthSource):
+    name = 'disclosure'
+
+    def code_exists(self, code: str) -> Optional[bool]:
+        return True if code in DISCLOSURES else None
+
+    def get(self, code, period, metric):
+        entry = DISCLOSURES.get(code)
+        if period != '2025FY' or entry is None or metric not in entry['metrics']:
+            return None
+        current, previous = entry['metrics'][metric]
+        return GroundTruth(
+            stock_code=code, name=entry['name'], period=period, metric=metric,
+            value=current, prior_year_value=previous,
+            evidence=Evidence(
+                source=self.name, period=period, title=f"{entry['name']}2025年年度报告摘要 §3.1",
+                value_yuan=current, url=entry['url'], published_on=entry['published_on'],
+                pdf_page=entry['pdf_page'],
+            ),
+        )
+
+
 # Period suffixes match extractor output: 2025Q3, 2025FY.
 PERIOD_TO_MMDD = {'Q1': '0331', 'Q2': '0630', 'Q3': '0930', 'FY': '1231'}
 # (year offset, mmdd) of the previous quarter-end
 PREV_QUARTER = {'Q1': (-1, '1231'), 'Q2': (0, '0331'), 'Q3': (0, '0630'), 'FY': (0, '0930')}
 # canonical metric -> row label in akshare stock_financial_abstract output
 AK_METRIC_ROW = {
-    '营业收入': '营业总收入',
+    '营业总收入': '营业总收入',
     '归属于上市公司股东的净利润': '归母净利润',
     '扣除非经常性损益后的净利润': '扣非净利润',
     '扣除非经常性损益后的归属于上市公司股东的净利润': '扣非归母净利润',
@@ -137,6 +193,8 @@ class _SqliteCache:
 
 
 class AkshareSource(GroundTruthSource):
+    name = 'akshare'
+
     def __init__(
         self,
         ak_module: Any = None,
@@ -237,8 +295,10 @@ class AkshareSource(GroundTruthSource):
             df = self._abstract(code)
         except DataSourceError:
             return None
+        if '指标' not in df:
+            return None
         rows = df[df['指标'] == AK_METRIC_ROW.get(metric, metric)]
-        if rows.empty:
+        if len(rows) != 1:
             return None
         row = rows.iloc[0]
 
@@ -250,7 +310,7 @@ class AkshareSource(GroundTruthSource):
                 f = float(v)
             except (TypeError, ValueError):
                 return None
-            return None if f != f else f  # f != f filters NaN
+            return f if math.isfinite(f) else None
 
         value = col(year, mmdd)
         if value is None:
@@ -264,10 +324,13 @@ class AkshareSource(GroundTruthSource):
             value=value,
             prior_year_value=col(str(int(year) - 1), mmdd),
             prior_quarter_value=col(str(int(year) + off), pmd),
+            evidence=Evidence(source=self.name, period=period, title='AKShare 财务摘要（非公告原文）', value_yuan=value),
         )
 
 
 def get_source(name: str) -> GroundTruthSource:
+    if name == 'disclosure':
+        return DisclosureSource()
     if name == 'akshare':
         return AkshareSource()
     if name == 'mock':

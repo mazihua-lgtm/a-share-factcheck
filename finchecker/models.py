@@ -18,6 +18,27 @@ class Status(str, Enum):
     UNVERIFIABLE = 'unverifiable'
 
 
+class ReportStatus(str, Enum):
+    NO_CLAIMS = 'no_claims'
+    UNVERIFIABLE = 'unverifiable'
+    INCOMPLETE = 'incomplete'
+    MISMATCH = 'mismatch'
+    VERIFIED = 'verified'
+    SIMULATION = 'simulation'
+
+
+class Evidence(BaseModel):
+    source: str
+    period: str
+    title: str
+    value_yuan: float
+    url: Optional[str] = None
+    published_on: Optional[str] = None
+    pdf_page: Optional[int] = None
+    comparison_period: Optional[str] = None
+    comparison_value_yuan: Optional[float] = None
+
+
 class FinancialClaim(BaseModel):
     """A single checkable assertion extracted from text."""
     raw_text: str
@@ -36,9 +57,13 @@ class VerificationResult(BaseModel):
     message: str = ''
     expected_value: Optional[float] = None
     expected_growth_pct: Optional[float] = None
+    evidence: Optional[Evidence] = None
 
 
 class DiscrepancyReport(BaseModel):
+    source: str
+    simulated: bool
+    status: ReportStatus
     total: int
     passed: int
     failed: int

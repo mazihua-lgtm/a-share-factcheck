@@ -21,7 +21,6 @@ REPORT_KEYWORD = {'半年报': 2, '中报': 2, '三季报': 3, '一季报': 1}
 METRIC_ALIASES = {
     '归母净利润': '归属于上市公司股东的净利润',
     '归属于母公司股东的净利润': '归属于上市公司股东的净利润',
-    '营业总收入': '营业收入',
     '营收': '营业收入',
     '扣非归母净利润': '扣除非经常性损益后的归属于上市公司股东的净利润',
     '归属于上市公司股东的扣除非经常性损益的净利润': '扣除非经常性损益后的归属于上市公司股东的净利润',
@@ -30,7 +29,7 @@ METRIC_ALIASES = {
     '每股收益': '基本每股收益',
 }
 CANONICAL_METRICS = [
-    '归属于上市公司股东的净利润', '营业收入', '净利润', '营业利润', '营业成本', '毛利率',
+    '归属于上市公司股东的净利润', '营业总收入', '营业收入', '净利润', '营业利润', '营业成本', '毛利率',
     '基本每股收益', '稀释每股收益', '总资产', '净资产',
 ]
 # Longest first: at any position the longest matching term wins.
@@ -62,11 +61,8 @@ def _period(m: re.Match) -> str:
 
 
 def _metric(sentence: str) -> str | None:
-    m = METRIC_RE.search(sentence)
-    if m is None:
-        return None
-    term = m.group(0)
-    return METRIC_ALIASES.get(term, term)
+    metrics = {METRIC_ALIASES.get(term, term) for term in METRIC_RE.findall(sentence)}
+    return next(iter(metrics)) if len(metrics) == 1 else None
 
 
 def _amount(number: str, unit: str) -> float:
@@ -82,22 +78,22 @@ def extract_claims(text: str) -> list[FinancialClaim]:
         sentence = sentence.strip()
         if not sentence:
             continue
-        cm = CODE_RE.search(sentence)
-        if cm:
-            last_code = cm.group(1)
-        code = cm.group(1) if cm else last_code
-        pm = PERIOD_RE.search(sentence)
-        period = _period(pm) if pm else None
+        codes = set(CODE_RE.findall(sentence))
+        if codes:
+            last_code = next(iter(codes)) if len(codes) == 1 else None
+        code = last_code
+        periods = {_period(match) for match in PERIOD_RE.finditer(sentence)}
+        period = next(iter(periods)) if len(periods) == 1 else None
         metric = _metric(sentence)
-        vm = VALUE_RE.search(sentence)
+        amounts = list(VALUE_RE.finditer(sentence))
         growths = list(GROWTH_RE.finditer(sentence))
-        if not vm and not growths:
+        if not amounts and not growths:
             continue
         base = {'raw_text': sentence, 'stock_code': code, 'period': period, 'metric': metric}
-        if vm:
+        for vm in amounts:
             claims.append(FinancialClaim(
                 kind=ClaimKind.VALUE,
-                declared_value=_amount(vm.group(1), vm.group(2)),
+                declared_value=_amount(vm.group(1), vm.group(2)) if len(amounts) == 1 else None,
                 **base,
             ))
         for gm in growths:
